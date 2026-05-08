@@ -1,0 +1,7 @@
+# 自动处理所有文本文件的换行符
+* text=auto
+
+# 强制配置文件使用 LF
+*.yaml text eol=lf
+*.sh text eol=lf
+*.py text eol=lf

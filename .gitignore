@@ -1,0 +1,75 @@
+# ==============================
+# Python & 环境相关
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==============================
+# 虚拟环境
+# ==============================
+venv/
+.env/
+.venv/
+env.bak/
+venv.bak/
+
+# ==============================
+# PyTorch & 深度学习文件
+# ==============================
+*.pt
+*.pth
+*.weights
+*.ckpt
+*.onnx
+*.engine
+
+# ==============================
+# YOLO 及当前项目特定输出
+# ==============================
+runs/
+wandb/
+*.cache
+evolve.txt
+results.txt
+hyp_evolved.yaml
+
+# ==============================
+# IDE 与操作系统缓存
+# ==============================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ==============================
+# 数据集与冗余套娃文件夹 (严禁上传)
+# ==============================
+data/flir_align/
+data/images/
+data/FLIR_yolo/
+multispectral-object-detection/
+multispectral-object-detection-main/
+video/
