@@ -160,8 +160,8 @@ class Detect(nn.Module):
 #         x = self.detect.to(device)([out_1, out_2, x])
 #
 #         return x
-#
-#
+
+
 class Model(nn.Module):
 
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
@@ -503,7 +503,12 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                     c2 = make_divisible(c2 * gw, 8)
                 args = [c1, c2, *args[1:]]
             else:
-                c1, c2 = ch[f], args[0]
+                # 原来的代码直接查 ch[f]，如果是列表就会报错。我们给它加个判断：
+                if isinstance(f, int):
+                    c1, c2 = ch[f], args[0]
+                # else:
+                #     # 如果 f 是个列表（说明是双流融合模块），我们默认拿第一个输入的通道数作为基准
+                #     c1, c2 = ch[f[0]], args[0]
                 if c2 != no:  # if not output
                     c2 = make_divisible(c2 * gw, 8)
 
@@ -520,6 +525,10 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             # print("ch[f]", f, ch[f[0]])
             c2 = ch[f[0]]
             args = [c2]
+
+        elif m is PixelGate:  # ← 新加
+            c2 = ch[f[0]]     # ← 新加
+            args = [c2]       # ← 新加
         elif m is Add2:
             # print("ch[f]", f, ch[f[0]])
             c2 = ch[f[0]]
