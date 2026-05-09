@@ -39,7 +39,9 @@ def test(data,
          compute_loss=None,
          half_precision=True,
          is_coco=False,
-         opt=None):
+         opt=None,
+         ie_net=None):  # <--- FQY FIX: 新增 ie_net 参数接收光照网络
+
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -57,10 +59,6 @@ def test(data,
         model = attempt_load(weights, map_location=device)  # load FP32 model
         gs = max(int(model.stride.max()), 32)  # grid size (max stride)
         imgsz = check_img_size(imgsz, s=gs)  # check img_size
-
-        # Multi-GPU disabled, incompatible with .half() https://github.com/ultralytics/yolov5/issues/99
-        # if device.type != 'cpu' and torch.cuda.device_count() > 1:
-        #     model = nn.DataParallel(model)
 
     # Half
     half = device.type != 'cpu' and half_precision  # half precision only supported on CUDA
@@ -84,14 +82,12 @@ def test(data,
         log_imgs = min(wandb_logger.log_imgs, 100)
     # Dataloader
     if not training:
-        # if device.type != 'cpu':
-        #     model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
         print(opt.task)
         task = opt.task if opt.task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
         val_path_rgb = data['val_rgb']
         val_path_ir = data['val_ir']
         dataloader = create_dataloader_rgb_ir(val_path_rgb, val_path_ir, imgsz, batch_size, gs, opt, pad=0.5, rect=True,
-                                       prefix=colorstr(f'{task}: '))[0]
+                                              prefix=colorstr(f'{task}: '))[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
@@ -102,7 +98,6 @@ def test(data,
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class, wandb_images = [], [], [], [], []
     for batch_i, (img, targets, paths, shapes) in enumerate(tqdm(dataloader, desc=s)):
-    # for batch_i, (img, targets, paths, shapes) in enumerate(tqdm(testloader, desc=s)):
         img = img.to(device, non_blocking=True)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -111,6 +106,18 @@ def test(data,
 
         img_rgb = img[:, :3, :, :]
         img_ir = img[:, 3:, :, :]
+
+        # ---- FQY BUG FIX START: PixelGate 验证集适配与精度对齐 ----
+        from models.common import PixelGateController
+        if ie_net is not None:
+            ie_net.eval()
+            # LightIENet 为 FP32 架构，必须转入 float 数据
+            PixelGateController.update(img_rgb.float(), ie_net)
+
+        # 核心：强制将 alpha_map 精度对齐至 YOLO 主模型的精度（此时为 HalfTensor）
+        if PixelGateController._alpha_map is not None:
+            PixelGateController._alpha_map = PixelGateController._alpha_map.to(img.dtype)
+        # ---- FQY BUG FIX END ----
 
         with torch.no_grad():
             # Run model
@@ -171,7 +178,6 @@ def test(data,
 
             # Append to pycocotools JSON dictionary
             if save_json:
-                # [{"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}, ...
                 image_id = int(path.stem) if path.stem.isnumeric() else path.stem
                 box = xyxy2xywh(predn[:, :4])  # xywh
                 box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
@@ -200,10 +206,7 @@ def test(data,
 
                     # Search for detections
                     if pi.shape[0]:
-                        # Prediction to target ious
                         ious, i = box_iou(predn[pi, :4], tbox[ti]).max(1)  # best ious, indices
-
-                        # Append detections
                         detected_set = set()
                         for j in (ious > iouv[0]).nonzero(as_tuple=False):
                             d = ti[i[j]]  # detected target
@@ -214,23 +217,18 @@ def test(data,
                                 if len(detected) == nl:  # all targets already located in image
                                     break
 
-            # Append statistics (correct, conf, pcls, tcls)
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
 
-        # Plot images
         if plots and batch_i < 3:
             f = save_dir / f'test_batch{batch_i}_labels.jpg'  # labels
-            # 对基准真实标签作图截取前3个通道
             Thread(target=plot_images, args=(img[:, :3], targets, paths, f, names), daemon=True).start()
             f = save_dir / f'test_batch{batch_i}_pred.jpg'  # predictions
-            # 对模型预测作图同样截取前3个通道
             Thread(target=plot_images, args=(img[:, :3], output_to_target(out), paths, f, names), daemon=True).start()
 
     # Compute statistics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
     if len(stats) and stats[0].any():
         p, r, ap, f1, ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
-        # print("mAP75", ap[:, 5].mean(-1))
         ap50, ap75, ap = ap[:, 0], ap[:, 5], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map75, map = p.mean(), r.mean(), ap50.mean(), ap75.mean(), ap.mean()
         nt = np.bincount(stats[3].astype(np.int64), minlength=nc)  # number of targets per class
@@ -241,17 +239,14 @@ def test(data,
     pf = '%20s' + '%12i' * 2 + '%12.3g' * 5  # print format
     print(pf % ('all', seen, nt.sum(), mp, mr, map50, map75, map))
 
-    # Print results per class
     if (verbose or (nc < 50 and not training)) and nc > 1 and len(stats):
         for i, c in enumerate(ap_class):
             print(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap75[i], ap[i]))
 
-    # Print speeds
     t = tuple(x / seen * 1E3 for x in (t0, t1, t0 + t1)) + (imgsz, imgsz, batch_size)  # tuple
     if not training:
         print('Speed: %.1f/%.1f/%.1f ms inference/NMS/total per %gx%g image at batch-size %g' % t)
 
-    # Plots
     if plots:
         confusion_matrix.plot(save_dir=save_dir, names=list(names.values()))
         if wandb_logger and wandb_logger.wandb:
@@ -260,7 +255,6 @@ def test(data,
     if wandb_images:
         wandb_logger.log({"Bounding Box Debugger/Images": wandb_images})
 
-    # Save JSON
     if save_json and len(jdict):
         w = Path(weights[0] if isinstance(weights, list) else weights).stem if weights is not None else ''  # weights
         anno_json = '../coco/annotations/instances_val2017.json'  # annotations json
@@ -269,7 +263,7 @@ def test(data,
         with open(pred_json, 'w') as f:
             json.dump(jdict, f)
 
-        try:  # https://github.com/cocodataset/cocoapi/blob/master/PythonAPI/pycocoEvalDemo.ipynb
+        try:
             from pycocotools.coco import COCO
             from pycocotools.cocoeval import COCOeval
 
@@ -286,7 +280,6 @@ def test(data,
         except Exception as e:
             print(f'pycocotools unable to run: {e}')
 
-    # Return results
     model.float()  # for training
     if not training:
         s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
@@ -299,7 +292,8 @@ def test(data,
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='test.py')
-    parser.add_argument('--weights', nargs='+', type=str, default='/home/fqy/proj/multispectral-object-detection/best.pt', help='model.pt path(s)')
+    parser.add_argument('--weights', nargs='+', type=str,
+                        default='/home/fqy/proj/multispectral-object-detection/best.pt', help='model.pt path(s)')
     parser.add_argument('--data', type=str, default='./data/multispectral/FLIR_aligned.yaml', help='*.data path')
     parser.add_argument('--batch-size', type=int, default=64, help='size of each image batch')
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
@@ -346,7 +340,6 @@ if __name__ == '__main__':
             test(opt.data, w, opt.batch_size, opt.img_size, 0.25, 0.45, save_json=False, plots=False, opt=opt)
 
     elif opt.task == 'study':  # run over a range of settings and save/plot
-        # python test.py --task study --data coco.yaml --iou 0.7 --weights yolov5s.pt yolov5m.pt yolov5l.pt yolov5x.pt
         x = list(range(256, 1536 + 128, 128))  # x axis (image sizes)
         for w in opt.weights:
             f = f'study_{Path(opt.data).stem}_{Path(w).stem}.txt'  # filename to save to

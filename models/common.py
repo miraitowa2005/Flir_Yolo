@@ -721,9 +721,17 @@ class PixelGateController:
     def get_alpha(cls, H, W, device):
         if cls._alpha_map is None:
             return torch.ones(1, 1, H, W, device=device) * 0.5
-        if cls._alpha_map.shape[2] != H or cls._alpha_map.shape[3] != W:
-            return F.adaptive_avg_pool2d(cls._alpha_map, (H, W))
-        return cls._alpha_map
+
+        # 调整空间尺寸
+        alpha = cls._alpha_map
+        if alpha.shape[2] != H or alpha.shape[3] != W:
+            alpha = F.adaptive_avg_pool2d(alpha, (H, W))
+
+        # 确保 batch 维度为 1，让广播机制处理不同 batch size
+        if alpha.shape[0] != 1:
+            alpha = alpha.mean(dim=0, keepdim=True)
+
+        return alpha
 
 
 class PixelGate(nn.Module):
