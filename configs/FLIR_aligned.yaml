@@ -1,0 +1,18 @@
+
+path: D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo
+
+
+train_rgb: D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo/images/visible/train
+val_rgb:   D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo/images/visible/val
+test_rgb:  D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo/images/visible/test
+
+
+train_ir:  D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo/images/thermal/train
+val_ir:    D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo/images/thermal/val
+test_ir:  D:/CatalogForProj/CV/ccf_c/data/FLIR_yolo/images/thermal/test
+
+
+nc: 3
+
+
+names: ['car', 'person', 'bicycle']
