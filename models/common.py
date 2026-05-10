@@ -718,20 +718,19 @@ class PixelGateController:
         cls._alpha_map = ie_net(rgb_img)
 
     @classmethod
-    def get_alpha(cls, H, W, device):
+    def get_alpha(cls, H, W, device, dtype):
+        # 兜底机制：若未成功获取，则返回 0.5 的均匀权重
         if cls._alpha_map is None:
-            return torch.ones(1, 1, H, W, device=device) * 0.5
+            return torch.ones(1, 1, H, W, device=device, dtype=dtype) * 0.5
 
-        # 调整空间尺寸
         alpha = cls._alpha_map
+
+        # 尺寸对齐：使用双线性插值保证注意力平滑过渡
         if alpha.shape[2] != H or alpha.shape[3] != W:
-            alpha = F.adaptive_avg_pool2d(alpha, (H, W))
+            alpha = F.interpolate(alpha, size=(H, W), mode='bilinear', align_corners=False)
 
-        # 确保 batch 维度为 1，让广播机制处理不同 batch size
-        if alpha.shape[0] != 1:
-            alpha = alpha.mean(dim=0, keepdim=True)
-
-        return alpha
+        # 强制精度与设备对齐，防止混合精度（AMP）或测试阶段（FP16）报错
+        return alpha.to(device=device, dtype=dtype)
 
 
 class PixelGate(nn.Module):
@@ -751,7 +750,7 @@ class PixelGate(nn.Module):
     def forward(self, x):
         F_rgb, F_ir = x[0], x[1]
         B, C, H, W = F_rgb.shape
-        alpha = PixelGateController.get_alpha(H, W, F_rgb.device)
+        alpha = PixelGateController.get_alpha(H, W, F_rgb.device, F_rgb.dtype)
         F_weighted  = alpha * F_rgb + (1 - alpha) * F_ir
         F_residual  = self.residual_conv(torch.cat([F_rgb, F_ir], dim=1))
         return F_weighted + F_residual

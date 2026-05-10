@@ -750,66 +750,46 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
         if rank in [-1, 0]:
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-            ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
+        # train.py 约第 835 行开始修改
+        for i, (imgs, targets, paths, _) in pbar:
+            ni = i + nb * epoch
+            imgs = imgs.to(device, non_blocking=True).float() / 255.0
+
+            # ---- 1. 先进行多尺度缩放 (Multi-scale) ----
+            if opt.multi_scale:
+                sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs
+                sf = sz / max(imgs.shape[2:])
+                if sf != 1:
+                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]
+                    imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
+
+            # ---- 2. 缩放后再提取 RGB 和 IR 通道 ----
             imgs_rgb = imgs[:, :3, :, :]
             imgs_ir = imgs[:, 3:, :, :]
 
+            # ---- 3. 更新光照权重图 alpha_map ----
             if ie_net is not None:
                 ie_net.train()
                 PixelGateController.update(imgs_rgb, ie_net)
 
-
-            # FQY my code 训练数据可视化
-            flage_visual = global_var.get_value('flag_visual_training_dataset')
-            if flage_visual:
-                from torchvision import transforms
-                unloader = transforms.ToPILImage()
-                for num in range(batch_size):
-                    image = imgs[num, :3, :, :].cpu().clone()  # clone the tensor
-                    image = image.squeeze(0)  # remove the fake batch dimension
-                    image = unloader(image)
-                    image.save('example_%s_%s_%s_color.jpg'%(str(epoch), str(i), str(num)))
-                    image = imgs[num, 3:, :, :].cpu().clone()  # clone the tensor
-                    image = image.squeeze(0)  # remove the fake batch dimension
-                    image = unloader(image)
-                    image.save('example_%s_%s_%s_ir.jpg'%(str(epoch), str(i), str(num)))
-
-
-            # Warmup
-            if ni <= nw:
-                xi = [0, nw]  # x interp
-                # model.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
-                accumulate = max(1, np.interp(ni, xi, [1, nbs / total_batch_size]).round())
-                for j, x in enumerate(optimizer.param_groups):
-                    # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
-                    x['lr'] = np.interp(ni, xi, [hyp['warmup_bias_lr'] if j == 2 else 0.0, x['initial_lr'] * lf(epoch)])
-                    if 'momentum' in x:
-                        x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
-
-            # Multi-scale
-            if opt.multi_scale:
-                sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
-                sf = sz / max(imgs.shape[2:])  # scale factor
-                if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-                    imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
-
-            # Forward
+            # ---- 4. 前向传播与 Loss 计算 ----
             with amp.autocast(enabled=cuda):
-                # pred = model(imgs)  # forward
-                pred = model(imgs_rgb, imgs_ir)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+                pred = model(imgs_rgb, imgs_ir)
+                loss, loss_items = compute_loss(pred, targets.to(device))
 
                 if ie_net is not None and PixelGateController._alpha_map is not None:
                     alpha = PixelGateController._alpha_map
+                    # 亮度伪监督 L_aux
                     brightness = imgs_rgb.mean(dim=1, keepdim=True)
                     illum_label = F.adaptive_avg_pool2d(brightness, 80)
                     L_aux = F.mse_loss(alpha, illum_label)
+
+                    # 平滑约束 L_smooth
                     dx = (alpha[:, :, :, 1:] - alpha[:, :, :, :-1]).abs().mean()
                     dy = (alpha[:, :, 1:, :] - alpha[:, :, :-1, :]).abs().mean()
                     L_smooth = dx + dy
+
+                    # 最终 Loss 合成
                     loss = loss + 0.1 * L_aux + 0.05 * L_smooth
 
                 if rank != -1:
@@ -876,7 +856,8 @@ def train_rgb_ir(hyp, opt, device, tb_writer=None):
                                                  plots=plots and final_epoch,
                                                  wandb_logger=wandb_logger,
                                                  compute_loss=compute_loss,
-                                                 is_coco=is_coco)
+                                                 is_coco=is_coco,
+                                                 ie_net=ie_net)
 
             # Write
             with open(results_file, 'a') as f:
