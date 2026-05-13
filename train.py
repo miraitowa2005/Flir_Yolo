@@ -921,7 +921,7 @@ if __name__ == '__main__':
     parser.add_argument('--cfg', type=str, default='D:/CatalogForProj/CV/ccf_c/configs/models/yolov5s_fusion_add_FLIR_aligned.yaml', help='model.yaml path')
     parser.add_argument('--data', type=str, default='D:/CatalogForProj/CV/ccf_c/configs/FLIR_aligned.yaml', help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='data/hyp.scratch.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=150)
     parser.add_argument('--batch-size', type=int, default=4, help='total batch size for all GPUs')
     parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='[train, test] image sizes')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
